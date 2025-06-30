@@ -346,7 +346,7 @@ static void announce(void)
   
   printf("========================================\n");
   printf("| Minix 3.4.0rc6 - SO - UNIFESP 1s2025 |\n");
-  printf("| Projeto Pratico (1) - Equipe 12      |\n");
+  printf("| Projeto Pratico (N) - Equipe 12      |\n");
   printf("========================================\n");
 
 }
@@ -369,7 +369,7 @@ void prepare_shutdown(const int how)
 
   printf("=======================================\n");
   printf("| ATE A PROXIMA - SO - UNIFESP 1s2025 |\n");
-  printf("| Projeto Pratico (1) - Equipe 12     |\n");
+  printf("| Projeto Pratico (N) - Equipe 12     |\n");
   printf("=======================================\n");
 
 }
