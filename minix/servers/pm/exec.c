@@ -80,7 +80,6 @@ int do_newexec(void)
 	if (r != OK)
 		panic("do_newexec: sys_datacopy failed: %d", r);
 
-	printf("Executando: %s\n", args.scriptname);
 	
 	allow_setuid = 0;	/* Do not allow setuid execution */
 	rmp->mp_flags &= ~TAINTED;	/* By default not tainted */
