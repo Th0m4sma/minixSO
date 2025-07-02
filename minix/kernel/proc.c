@@ -29,6 +29,7 @@
  * nonempty lists. As shown above, this is not required with pointer pointers.
  */
 
+#include <stdint.h>        // Recomendado para tipos explícitos
 #include <stddef.h>
 #include <signal.h>
 #include <assert.h>
@@ -42,7 +43,7 @@
 #include <minix/syslib.h>
 
 #define RAND_MAX  0x7fffffff
-static u_long next = 1;
+static unsigned long next = 1;
 
 /* Scheduling and message passing functions */
 static void idle(void);
@@ -1786,32 +1787,44 @@ void dequeue(struct proc *rp)
  *===========================================================================*/
 
 int rand_c(void) {
-	return (int)((next = next * 1103515245) % ((u_long)RAND_MAX + 1));
+    next = (unsigned long)(next * 1103515245UL);
+    return (int)(next % ((unsigned long)RAND_MAX + 1));
 }
 
+
+/*===========================================================================*
+ *				pick_proc				     * 
+ *===========================================================================*/
 /*===========================================================================*
  *				pick_proc				     * 
  *===========================================================================*/
 static struct proc * pick_proc(void)
 {
+	/* --- PASSO 1: Mova TODAS as declarações para o início --- */
 	struct proc *rp;
 	struct proc **rdy_head;
 	int q, i;
-
-	int processes_ready[8] = {0};         // Para filas 7 a 14
-	int tickets_in_queue[8] = {0};        // Quantidade de tickets por fila
+	int processes_ready[8] = {0};
+	int tickets_in_queue[8] = {0};
 	int total_tickets = 0, acc = 0;
 	int chosen_ticket;
 	int selected_queue = -1;
+	int idx; /* A variável 'idx' também deve ser declarada aqui */
+	int prio; /* E a variável 'prio' também */
 
+	/* --- Agora o código executável pode começar --- */
 	rdy_head = get_cpulocal_var(run_q_head);
 
 	// Conta quantos processos estão prontos por fila (7 a 14)
 	for (i = 0; i < NR_TASKS + NR_PROCS; i++) {
-		rp = proc[i];
-		if (!is_ok_proc(rp)) continue;
+		rp = &proc[i]; /* Use o endereço do elemento do array */
 
-		int prio = rp->p_priority;
+		/* --- PASSO 2: Substitua is_ok_proc pela verificação correta --- */
+		if (rp->p_rts_flags & RTS_SLOT_FREE) {
+			continue; /* Pula o slot se estiver livre */
+		}
+
+		prio = rp->p_priority;
 		if (prio >= 7 && prio <= 14 && proc_is_runnable(rp)) {
 			processes_ready[prio - 7]++;
 		}
@@ -1819,7 +1832,7 @@ static struct proc * pick_proc(void)
 
 	// Gera os tickets: mais tickets para filas com mais prioridade (7 > 14)
 	for (q = 7; q <= 14; q++) {
-		int idx = q - 7;
+		idx = q - 7; /* Apenas atribuição, sem declaração 'int' */
 		tickets_in_queue[idx] = (16 - q) * processes_ready[idx];
 		total_tickets += tickets_in_queue[idx];
 	}
@@ -1837,9 +1850,10 @@ static struct proc * pick_proc(void)
 	}
 
 	// Sorteia fila
+	/* Adicionado +1 para evitar módulo por zero se total_tickets for 0, embora já verificado */
 	chosen_ticket = rand_c() % total_tickets;
 	for (q = 7; q <= 14; q++) {
-		int idx = q - 7;
+		idx = q - 7; /* Apenas atribuição */
 		acc += tickets_in_queue[idx];
 		if (chosen_ticket < acc) {
 			selected_queue = q;
@@ -1863,6 +1877,7 @@ static struct proc * pick_proc(void)
 
 	return NULL;
 }
+
 
 /*===========================================================================*
  *				endpoint_lookup				     *
