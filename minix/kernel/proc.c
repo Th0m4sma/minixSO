@@ -42,8 +42,7 @@
 #include <minix/syslib.h>
 
 #define RAND_MAX  0x7fffffff
-
-static u_long next = 1; 
+static u_long next = 1;
 
 /* Scheduling and message passing functions */
 static void idle(void);
@@ -1786,86 +1785,83 @@ void dequeue(struct proc *rp)
  *				Gerando Números Aleatórios				     * 
  *===========================================================================*/
 
- int rand_c(void) {
+int rand_c(void) {
 	return (int)((next = next * 1103515245) % ((u_long)RAND_MAX + 1));
- }
+}
 
 /*===========================================================================*
  *				pick_proc				     * 
  *===========================================================================*/
 static struct proc * pick_proc(void)
 {
-/* Decide who to run now.  A new process is selected and returned.
- * When a billable process is selected, record it in 'bill_ptr', so that the 
- * clock task can tell who to bill for system time.
- *
- * This function always uses the run queues of the local cpu!
- */
-  register struct proc *rp;			/* process to run */
-  struct proc **rdy_head;
-  int q;				/* iterate over queues */
+	struct proc *rp;
+	struct proc **rdy_head;
+	int q, i;
 
-  int processes_ready[7] = { 0 };
-  int tickets_in_every_queue[7] = { 0 };
-  int chosen_ticket, acc_sum = 0, min_ticket_queue = 7;
-  int tickets = 0;
-  int ticket;
+	int processes_ready[8] = {0};         // Para filas 7 a 14
+	int tickets_in_queue[8] = {0};        // Quantidade de tickets por fila
+	int total_tickets = 0, acc = 0;
+	int chosen_ticket;
+	int selected_queue = -1;
 
-  /* Check each of the scheduling queues for ready processes. The number of
-   * queues is defined in proc.h, and priorities are set in the task table.
-   * If there are no processes ready to run, return NULL.
-   */
-  rdy_head = get_cpulocal_var(run_q_head);
-  for (q=0; q < NR_SCHED_QUEUES; q++) {
-	if(q == 7) {
-		q+= 8;
-	}	
-	if(!(rp = rdy_head[q])) {
-		TRACE(VF_PICKPROC, printf("cpu %d queue %d empty\n", cpuid, q););
-		continue;
-	}
-	assert(proc_is_runnable(rp));
-	if (priv(rp)->s_flags & BILLABLE)	 	
-		get_cpulocal_var(bill_ptr) = rp; /* bill for system time */
-	return rp;
-  }
+	rdy_head = get_cpulocal_var(run_q_head);
 
-  for(int i = 0; i <= NR_TASKS + NR_PROCS; i++) {
-	register struct proc *process = proc[i];
-	if(process->p_priority <= 14 && process->p_priority >= 7) {
-		const int priority_queue = process->p_priority;
+	// Conta quantos processos estão prontos por fila (7 a 14)
+	for (i = 0; i < NR_TASKS + NR_PROCS; i++) {
+		rp = proc[i];
+		if (!is_ok_proc(rp)) continue;
 
-		if(proc_is_runnable(process)) {
-			processes_ready[7-priority_queue]++;
+		int prio = rp->p_priority;
+		if (prio >= 7 && prio <= 14 && proc_is_runnable(rp)) {
+			processes_ready[prio - 7]++;
 		}
 	}
-  }
 
-  for(q = 7;q< 15;q++) {
-	ticket = (16-q)*processes_ready[7-q];
-	tickets_in_every_queue[7-q] = ticket;
-	tickets += ticket;
-  }
-
-  chosen_ticket = rand_c() % (tickets+1);
-
-  for(q=7; q < 15; q++) {
-	ticket = tickets_in_every_queue[7-q];
-	acc_sum += ticket;
-	if(chosen_ticket <= acc_sum) {
-		min_ticket_queue = q;
-		break;
+	// Gera os tickets: mais tickets para filas com mais prioridade (7 > 14)
+	for (q = 7; q <= 14; q++) {
+		int idx = q - 7;
+		tickets_in_queue[idx] = (16 - q) * processes_ready[idx];
+		total_tickets += tickets_in_queue[idx];
 	}
-  }
 
-  if((rp = rdy_head[min_ticket_queue]) && proc_is_runnable(rp)) {
-	if(priv(rp)->s_flags & BILLABLE) {
-		get_cpulocal_var(bill_ptr) = rp;
+	// Se não há tickets, então não há processo de usuário. Volta pro escalonador normal (prioridades 0-6)
+	if (total_tickets == 0) {
+		for (q = 0; q < 7; q++) {
+			if ((rp = rdy_head[q]) && proc_is_runnable(rp)) {
+				if (priv(rp)->s_flags & BILLABLE)
+					get_cpulocal_var(bill_ptr) = rp;
+				return rp;
+			}
+		}
+		return NULL;
 	}
-	return rp;
-  }
 
-  return NULL;
+	// Sorteia fila
+	chosen_ticket = rand_c() % total_tickets;
+	for (q = 7; q <= 14; q++) {
+		int idx = q - 7;
+		acc += tickets_in_queue[idx];
+		if (chosen_ticket < acc) {
+			selected_queue = q;
+			break;
+		}
+	}
+
+	// Retorna o primeiro processo "runnable" da fila sorteada
+	if (selected_queue != -1) {
+		if ((rp = rdy_head[selected_queue])) {
+			while (rp && !proc_is_runnable(rp)) {
+				rp = rp->p_nextready;
+			}
+			if (rp) {
+				if (priv(rp)->s_flags & BILLABLE)
+					get_cpulocal_var(bill_ptr) = rp;
+				return rp;
+			}
+		}
+	}
+
+	return NULL;
 }
 
 /*===========================================================================*
