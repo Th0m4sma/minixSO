@@ -43,7 +43,7 @@
 
 #define RAND_MAX  0x7fffffff
 
-static void u_long next = 1; 
+static u_long next = 1; 
 
 /* Scheduling and message passing functions */
 static void idle(void);
@@ -1830,7 +1830,7 @@ static struct proc * pick_proc(void)
 	return rp;
   }
 
-  for(int i = 0; i <= NR_TASKS && process->p_priority >= 7;i++) {
+  for(int i = 0; i <= NR_TASKS + NR_PROCS; i++) {
 	register struct proc *process = proc[i];
 	if(process->p_priority <= 14 && process->p_priority >= 7) {
 		const int priority_queue = process->p_priority;
