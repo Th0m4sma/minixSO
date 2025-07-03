@@ -58,7 +58,7 @@ static int try_async(struct proc *caller_ptr);
 static int try_one(endpoint_t receive_e, struct proc *src_ptr,
 	struct proc *dst_ptr);
 static struct proc * pick_proc(void);
-// static void enqueue_head(struct proc *rp); // Removido para Round Robin com fila única
+static void enqueue_head(struct proc *rp);
 
 /* all idles share the same idle_priv structure */
 static struct priv idle_priv;
@@ -322,8 +322,10 @@ not_runnable_pick_new:
 	if (proc_is_preempted(p)) {
 		p->p_rts_flags &= ~RTS_PREEMPTED;
 		if (proc_is_runnable(p)) {
-			// In Round Robin, preempted processes go to the end of the queue
-			enqueue(p);
+			if (p->p_cpu_time_left)
+				enqueue_head(p);
+			else
+				enqueue(p);
 		}
 	}
 
@@ -1602,7 +1604,7 @@ void enqueue(
  * This function can be used x-cpu as it always uses the queues of the cpu the
  * process is assigned to.
  */
-  const int q = 0;	 		/* scheduling queue to use (always 0 for single queue) */
+  int q = rp->p_priority;	 		/* scheduling queue to use */
   struct proc **rdy_head, **rdy_tail;
   
   assert(proc_is_runnable(rp));
@@ -1625,16 +1627,16 @@ void enqueue(
 
   if (cpuid == rp->p_cpu) {
 	  /*
-	   * In Round Robin, preemption is based on quantum expiration, not priority.
-	   * The current process will be preempted when its quantum runs out.
+	   * enqueueing a process with a higher priority than the current one,
+	   * it gets preempted. The current process must be preemptible. Testing
+	   * the priority also makes sure that a process does not preempt itself
 	   */
-	  // Original preemption logic removed for single queue Round Robin
-	  // struct proc * p;
-	  // p = get_cpulocal_var(proc_ptr);
-	  // assert(p);
-	  // if((p->p_priority > rp->p_priority) &&
-	  //		  (priv(p)->s_flags & PREEMPTIBLE))
-	  //	  RTS_SET(p, RTS_PREEMPTED); /* calls dequeue() */
+	  struct proc * p;
+	  p = get_cpulocal_var(proc_ptr);
+	  assert(p);
+	  if((p->p_priority > rp->p_priority) &&
+			  (priv(p)->s_flags & PREEMPTIBLE))
+		  RTS_SET(p, RTS_PREEMPTED); /* calls dequeue() */
   }
 #ifdef CONFIG_SMP
   /*
@@ -1667,7 +1669,7 @@ void enqueue(
  */
 static void enqueue_head(struct proc *rp)
 {
-  const int q = 0;	 		/* scheduling queue to use */
+  const int q = rp->p_priority;	 		/* scheduling queue to use */
 
   struct proc **rdy_head, **rdy_tail;
 
@@ -1721,7 +1723,7 @@ void dequeue(struct proc *rp)
  * This function can operate x-cpu as it always removes the process from the
  * queue of the cpu the process is currently assigned to.
  */
-  const int q = 0;		/* queue to use (always 0 for single queue) */
+  int q = rp->p_priority;		/* queue to use */
   struct proc **xpp;			/* iterate over queue */
   struct proc *prev_xp;
   u64_t tsc, tsc_delta;
@@ -1790,19 +1792,24 @@ static struct proc * pick_proc(void)
  */
   register struct proc *rp;			/* process to run */
   struct proc **rdy_head;
-  const int q = 0; // Always use the single queue
+  int q;				/* iterate over queues */
 
-  /* Check the single scheduling queue for ready processes. */
+  /* Check each of the scheduling queues for ready processes. The number of
+   * queues is defined in proc.h, and priorities are set in the task table.
+   * If there are no processes ready to run, return NULL.
+   */
   rdy_head = get_cpulocal_var(run_q_head);
-  
-  if(!(rp = rdy_head[q])) {
+  for (q=0; q < NR_SCHED_QUEUES; q++) {	
+	if(!(rp = rdy_head[q])) {
 		TRACE(VF_PICKPROC, printf("cpu %d queue %d empty\n", cpuid, q););
-		return NULL;
+		continue;
 	}
 	assert(proc_is_runnable(rp));
 	if (priv(rp)->s_flags & BILLABLE)	 	
 		get_cpulocal_var(bill_ptr) = rp; /* bill for system time */
 	return rp;
+  }
+  return NULL;
 }
 
 /*===========================================================================*
@@ -1885,22 +1892,18 @@ static void notify_scheduler(struct proc *p)
 
 void proc_no_time(struct proc * p)
 {
-	if (!proc_kernel_scheduler(p) && priv(p)->s_flags & PREEMPTIBLE) {
-		/* this dequeues the process */
-		notify_scheduler(p);
-	}
-	else {
-		/*
-		 * non-preemptible processes only need their quantum to
-		 * be renewed. In fact, they by pass scheduling
-		 */
-		p->p_cpu_time_left = ms_2_cpu_time(p->p_quantum_size_ms);
-#if DEBUG_RACE
-		RTS_SET(p, RTS_PREEMPTED);
-		RTS_UNSET(p, RTS_PREEMPTED);
-#endif
-	}
+	/*
+	 * MODIFICAÇÃO PARA ESCALONADOR DE PRIORIDADE SIMPLES:
+	 * Para um escalonador de prioridade estrita, um processo não deve
+	 * perder a CPU apenas porque seu quantum acabou. Ele só deve ser
+	 * preemptado por um processo de maior prioridade. Portanto,
+	 * simplesmente renovamos seu quantum e o deixamos continuar.
+	 * A lógica original que notificava o escalonador de usuário (sched)
+	 * foi removida.
+	 */
+	p->p_cpu_time_left = ms_2_cpu_time(p->p_quantum_size_ms);
 }
+
 
 void reset_proc_accounting(struct proc *p)
 {
@@ -1971,5 +1974,3 @@ void ser_dump_proc(void)
                 print_proc_recursive(pp);
         }
 }
-
-
