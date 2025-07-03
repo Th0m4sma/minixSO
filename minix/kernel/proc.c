@@ -58,7 +58,7 @@ static int try_async(struct proc *caller_ptr);
 static int try_one(endpoint_t receive_e, struct proc *src_ptr,
 	struct proc *dst_ptr);
 static struct proc * pick_proc(void);
-static void enqueue_head(struct proc *rp);
+// static void enqueue_head(struct proc *rp); // Removido para Round Robin com fila única
 
 /* all idles share the same idle_priv structure */
 static struct priv idle_priv;
@@ -322,10 +322,8 @@ not_runnable_pick_new:
 	if (proc_is_preempted(p)) {
 		p->p_rts_flags &= ~RTS_PREEMPTED;
 		if (proc_is_runnable(p)) {
-			if (p->p_cpu_time_left)
-				enqueue_head(p);
-			else
-				enqueue(p);
+			// In Round Robin, preempted processes go to the end of the queue
+			enqueue(p);
 		}
 	}
 
@@ -1604,7 +1602,7 @@ void enqueue(
  * This function can be used x-cpu as it always uses the queues of the cpu the
  * process is assigned to.
  */
-  int q = 0;	 		/* scheduling queue to use */
+  const int q = 0;	 		/* scheduling queue to use (always 0 for single queue) */
   struct proc **rdy_head, **rdy_tail;
   
   assert(proc_is_runnable(rp));
@@ -1627,16 +1625,16 @@ void enqueue(
 
   if (cpuid == rp->p_cpu) {
 	  /*
-	   * enqueueing a process with a higher priority than the current one,
-	   * it gets preempted. The current process must be preemptible. Testing
-	   * the priority also makes sure that a process does not preempt itself
+	   * In Round Robin, preemption is based on quantum expiration, not priority.
+	   * The current process will be preempted when its quantum runs out.
 	   */
-	  struct proc * p;
-	  p = get_cpulocal_var(proc_ptr);
-	  assert(p);
-	  if((p->p_priority > rp->p_priority) &&
-			  (priv(p)->s_flags & PREEMPTIBLE))
-		  RTS_SET(p, RTS_PREEMPTED); /* calls dequeue() */
+	  // Original preemption logic removed for single queue Round Robin
+	  // struct proc * p;
+	  // p = get_cpulocal_var(proc_ptr);
+	  // assert(p);
+	  // if((p->p_priority > rp->p_priority) &&
+	  //		  (priv(p)->s_flags & PREEMPTIBLE))
+	  //	  RTS_SET(p, RTS_PREEMPTED); /* calls dequeue() */
   }
 #ifdef CONFIG_SMP
   /*
@@ -1723,7 +1721,7 @@ void dequeue(struct proc *rp)
  * This function can operate x-cpu as it always removes the process from the
  * queue of the cpu the process is currently assigned to.
  */
-  int q = 0;		/* queue to use */
+  const int q = 0;		/* queue to use (always 0 for single queue) */
   struct proc **xpp;			/* iterate over queue */
   struct proc *prev_xp;
   u64_t tsc, tsc_delta;
@@ -1792,24 +1790,19 @@ static struct proc * pick_proc(void)
  */
   register struct proc *rp;			/* process to run */
   struct proc **rdy_head;
-  int q;				/* iterate over queues */
+  const int q = 0; // Always use the single queue
 
-  /* Check each of the scheduling queues for ready processes. The number of
-   * queues is defined in proc.h, and priorities are set in the task table.
-   * If there are no processes ready to run, return NULL.
-   */
+  /* Check the single scheduling queue for ready processes. */
   rdy_head = get_cpulocal_var(run_q_head);
-  for (q=0; q < NR_SCHED_QUEUES; q++) {	
-	if(!(rp = rdy_head[q])) {
+  
+  if(!(rp = rdy_head[q])) {
 		TRACE(VF_PICKPROC, printf("cpu %d queue %d empty\n", cpuid, q););
-		continue;
+		return NULL;
 	}
 	assert(proc_is_runnable(rp));
 	if (priv(rp)->s_flags & BILLABLE)	 	
 		get_cpulocal_var(bill_ptr) = rp; /* bill for system time */
 	return rp;
-  }
-  return NULL;
 }
 
 /*===========================================================================*
@@ -1978,3 +1971,5 @@ void ser_dump_proc(void)
                 print_proc_recursive(pp);
         }
 }
+
+

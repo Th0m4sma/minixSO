@@ -96,9 +96,9 @@ int do_noquantum(message *m_ptr)
 	}
 
 	rmp = &schedproc[proc_nr_n];
-	if (rmp->priority < MIN_USER_Q) {
-		rmp->priority = rmp->priority; /* lower priority */
-	}
+	// In Round Robin, when a process runs out of quantum, it should be re-enqueued
+	// at the end of the single ready queue. Its priority remains the same.
+	rmp->priority = USER_Q; // Ensure it's set to the default user queue for RR
 
 	if ((rv = schedule_process_local(rmp)) != OK) {
 		return rv;
@@ -160,7 +160,9 @@ int do_start_scheduling(message *m_ptr)
 	/* Populate process slot */
 	rmp->endpoint     = m_ptr->m_lsys_sched_scheduling_start.endpoint;
 	rmp->parent       = m_ptr->m_lsys_sched_scheduling_start.parent;
-	rmp->max_priority = m_ptr->m_lsys_sched_scheduling_start.maxprio;
+	// For Round Robin with a single queue, max_priority can be simplified or ignored
+	// as all processes will effectively have the same priority (USER_Q).
+	rmp->max_priority = USER_Q; // Set to default user queue
 	if (rmp->max_priority >= NR_SCHED_QUEUES) {
 		return EINVAL;
 	}
@@ -189,10 +191,8 @@ int do_start_scheduling(message *m_ptr)
 	switch (m_ptr->m_type) {
 
 	case SCHEDULING_START:
-		/* We have a special case here for system processes, for which
-		 * quanum and priority are set explicitly rather than inherited 
-		 * from the parent */
-		rmp->priority   = rmp->max_priority;
+		/* For Round Robin, all processes have the same priority and time slice. */
+		rmp->priority   = USER_Q;
 		rmp->time_slice = DEFAULT_USER_TIME_SLICE;
 		break;
 		
@@ -204,7 +204,7 @@ int do_start_scheduling(message *m_ptr)
 				&parent_nr_n)) != OK)
 			return rv;
 
-		rmp->priority = rmp->max_priority;
+		rmp->priority = USER_Q;
 		rmp->time_slice = DEFAULT_USER_TIME_SLICE;
 		break;
 		
@@ -270,22 +270,15 @@ int do_nice(message *m_ptr)
 
 	rmp = &schedproc[proc_nr_n];
 	new_q = m_ptr->m_pm_sched_scheduling_set_nice.maxprio;
-	if (new_q >= NR_SCHED_QUEUES) {
-		return EINVAL;
-	}
-
-	/* Store old values, in case we need to roll back the changes */
-	old_q     = rmp->priority;
-	old_max_q = rmp->max_priority;
-
-	/* Update the proc entry and reschedule the process */
-	rmp->max_priority = rmp->priority = new_q;
+	// For Round Robin, priority changes are simplified. All processes are in the same queue.
+	// We can choose to ignore this or simply set it to the default user queue.
+	rmp->max_priority = USER_Q; // Set to default user queue
+	rmp->priority = USER_Q;     // Set to default user queue
 
 	if ((rv = schedule_process_local(rmp)) != OK) {
 		/* Something went wrong when rescheduling the process, roll
 		 * back the changes to proc struct */
-		rmp->priority     = old_q;
-		rmp->max_priority = old_max_q;
+		// No rollback needed if we always set to USER_Q
 	}
 
 	return rv;
@@ -337,6 +330,10 @@ void init_scheduling(void)
 
 	balance_timeout = BALANCE_TIMEOUT * sys_hz();
 
+	// For Round Robin with a single queue, balance_queues is not strictly necessary
+	// as there are no multiple queues to balance. We can keep the alarm for future
+	// extensions or remove it if not needed.
+	// For now, we'll keep it but the balance_queues function will be simplified.
 	if ((r = sys_setalarm(balance_timeout, 0)) != OK)
 		panic("sys_setalarm failed: %d", r);
 }
@@ -352,13 +349,17 @@ void init_scheduling(void)
  */
 void balance_queues(void)
 {
+	// For Round Robin with a single queue, this function is not needed for balancing priorities.
+	// All processes are treated equally. We can simply re-set the alarm.
+	// If a process's priority was somehow changed, we could reset it to USER_Q here.
 	struct schedproc *rmp;
 	int r, proc_nr;
 
 	for (proc_nr=0, rmp=schedproc; proc_nr < NR_PROCS; proc_nr++, rmp++) {
 		if (rmp->flags & IN_USE) {
-			if (rmp->priority > rmp->max_priority) {
-				rmp->priority = rmp->priority; /* increase priority */
+			// Ensure all active processes are set to the default user queue priority
+			if (rmp->priority != USER_Q) {
+				rmp->priority = USER_Q; 
 				schedule_process_local(rmp);
 			}
 		}
@@ -367,3 +368,4 @@ void balance_queues(void)
 	if ((r = sys_setalarm(balance_timeout, 0)) != OK)
 		panic("sys_setalarm failed: %d", r);
 }
+
