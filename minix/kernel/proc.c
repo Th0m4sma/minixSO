@@ -29,7 +29,6 @@
  * nonempty lists. As shown above, this is not required with pointer pointers.
  */
 
-#include <stdint.h>        // Recomendado para tipos explícitos
 #include <stddef.h>
 #include <signal.h>
 #include <assert.h>
@@ -41,9 +40,6 @@
 #include "arch_proto.h"
 
 #include <minix/syslib.h>
-
-#define RAND_MAX  0x7fffffff
-static unsigned long next = 1;
 
 /* Scheduling and message passing functions */
 static void idle(void);
@@ -1608,7 +1604,7 @@ void enqueue(
  * This function can be used x-cpu as it always uses the queues of the cpu the
  * process is assigned to.
  */
-  int q = rp->p_priority;	 		/* scheduling queue to use */
+  int q = 0;	 		/* scheduling queue to use */
   struct proc **rdy_head, **rdy_tail;
   
   assert(proc_is_runnable(rp));
@@ -1673,7 +1669,7 @@ void enqueue(
  */
 static void enqueue_head(struct proc *rp)
 {
-  const int q = rp->p_priority;	 		/* scheduling queue to use */
+  const int q = 0;	 		/* scheduling queue to use */
 
   struct proc **rdy_head, **rdy_tail;
 
@@ -1727,7 +1723,7 @@ void dequeue(struct proc *rp)
  * This function can operate x-cpu as it always removes the process from the
  * queue of the cpu the process is currently assigned to.
  */
-  int q = rp->p_priority;		/* queue to use */
+  int q = 0;		/* queue to use */
   struct proc **xpp;			/* iterate over queue */
   struct proc *prev_xp;
   u64_t tsc, tsc_delta;
@@ -1782,102 +1778,39 @@ void dequeue(struct proc *rp)
   assert(runqueues_ok_local());
 #endif
 }
-/*===========================================================================*
- *				Gerando Números Aleatórios				     * 
- *===========================================================================*/
 
-int rand_c(void) {
-    next = (unsigned long)(next * 1103515245UL);
-    return (int)(next % ((unsigned long)RAND_MAX + 1));
-}
-
-
-/*===========================================================================*
- *				pick_proc				     * 
- *===========================================================================*/
 /*===========================================================================*
  *				pick_proc				     * 
  *===========================================================================*/
 static struct proc * pick_proc(void)
 {
-	/* --- PASSO 1: Mova TODAS as declarações para o início --- */
-	struct proc *rp;
-	struct proc **rdy_head;
-	int q, i;
-	int processes_ready[8] = {0};
-	int tickets_in_queue[8] = {0};
-	int total_tickets = 0, acc = 0;
-	int chosen_ticket;
-	int selected_queue = -1;
-	int idx; /* A variável 'idx' também deve ser declarada aqui */
-	int prio; /* E a variável 'prio' também */
+/* Decide who to run now.  A new process is selected and returned.
+ * When a billable process is selected, record it in 'bill_ptr', so that the 
+ * clock task can tell who to bill for system time.
+ *
+ * This function always uses the run queues of the local cpu!
+ */
+  register struct proc *rp;			/* process to run */
+  struct proc **rdy_head;
+  int q;				/* iterate over queues */
 
-	/* --- Agora o código executável pode começar --- */
-	rdy_head = get_cpulocal_var(run_q_head);
-
-	// Conta quantos processos estão prontos por fila (7 a 14)
-	for (i = 0; i < NR_TASKS + NR_PROCS; i++) {
-		rp = &proc[i]; /* Use o endereço do elemento do array */
-
-		/* --- PASSO 2: Substitua is_ok_proc pela verificação correta --- */
-		if (rp->p_rts_flags & RTS_SLOT_FREE) {
-			continue; /* Pula o slot se estiver livre */
-		}
-
-		prio = rp->p_priority;
-		if (prio >= 7 && prio <= 14 && proc_is_runnable(rp)) {
-			processes_ready[prio - 7]++;
-		}
+  /* Check each of the scheduling queues for ready processes. The number of
+   * queues is defined in proc.h, and priorities are set in the task table.
+   * If there are no processes ready to run, return NULL.
+   */
+  rdy_head = get_cpulocal_var(run_q_head);
+  for (q=0; q < NR_SCHED_QUEUES; q++) {	
+	if(!(rp = rdy_head[q])) {
+		TRACE(VF_PICKPROC, printf("cpu %d queue %d empty\n", cpuid, q););
+		continue;
 	}
-
-	// Gera os tickets: mais tickets para filas com mais prioridade (7 > 14)
-	for (q = 7; q <= 14; q++) {
-		idx = q - 7; /* Apenas atribuição, sem declaração 'int' */
-		tickets_in_queue[idx] = (16 - q) * processes_ready[idx];
-		total_tickets += tickets_in_queue[idx];
-	}
-
-	// Se não há tickets, então não há processo de usuário. Volta pro escalonador normal (prioridades 0-6)
-	if (total_tickets == 0) {
-		for (q = 0; q < 7; q++) {
-			if ((rp = rdy_head[q]) && proc_is_runnable(rp)) {
-				if (priv(rp)->s_flags & BILLABLE)
-					get_cpulocal_var(bill_ptr) = rp;
-				return rp;
-			}
-		}
-		return NULL;
-	}
-
-	// Sorteia fila
-	/* Adicionado +1 para evitar módulo por zero se total_tickets for 0, embora já verificado */
-	chosen_ticket = rand_c() % total_tickets;
-	for (q = 7; q <= 14; q++) {
-		idx = q - 7; /* Apenas atribuição */
-		acc += tickets_in_queue[idx];
-		if (chosen_ticket < acc) {
-			selected_queue = q;
-			break;
-		}
-	}
-
-	// Retorna o primeiro processo "runnable" da fila sorteada
-	if (selected_queue != -1) {
-		if ((rp = rdy_head[selected_queue])) {
-			while (rp && !proc_is_runnable(rp)) {
-				rp = rp->p_nextready;
-			}
-			if (rp) {
-				if (priv(rp)->s_flags & BILLABLE)
-					get_cpulocal_var(bill_ptr) = rp;
-				return rp;
-			}
-		}
-	}
-
-	return NULL;
+	assert(proc_is_runnable(rp));
+	if (priv(rp)->s_flags & BILLABLE)	 	
+		get_cpulocal_var(bill_ptr) = rp; /* bill for system time */
+	return rp;
+  }
+  return NULL;
 }
-
 
 /*===========================================================================*
  *				endpoint_lookup				     *
